@@ -297,6 +297,8 @@ void MultiCameraFusion::groupFusion(
   std::map<IdType, FusionRecord> & grouped_record_map)
 {
   grouped_record_map.clear();
+
+  std::map<IdType, GroupFusionInfo> group_fusion_info_map;
   for (const auto & p : fused_record_map) {
     IdType roi_id = p.second.roi.traffic_light_id;
     /*
@@ -308,18 +310,39 @@ void MultiCameraFusion::groupFusion(
       continue;
     }
 
-    /*
-    keep the best record for every regulatory element id
-    */
+    const auto & record = p.second;
+    const uint8_t color = record.signal.elements[0].color;
+    const double confidence = record.signal.elements[0].confidence;
     const auto reg_ele_id_vec =
       traffic_light_id_to_regulatory_ele_id_[p.second.roi.traffic_light_id];
     for (const auto & reg_ele_id : reg_ele_id_vec) {
+      group_fusion_info_map[reg_ele_id].accumulated_scores[color] += confidence;
+      auto & best_record_for_color =
+        group_fusion_info_map[reg_ele_id].best_record_for_color[color];
       if (
-        grouped_record_map.count(reg_ele_id) == 0 ||
-        ::compareRecord(p.second, grouped_record_map[reg_ele_id]) >= 0) {
-        grouped_record_map[reg_ele_id] = p.second;
+        best_record_for_color.signal.elements.empty() ||
+        confidence > best_record_for_color.signal.elements[0].confidence  
+      ) {
+        best_record_for_color = record;
       }
     }
+  }
+
+  for (const auto & pair : group_fusion_info_map) {
+    const IdType reg_ele_id = pair.first;
+    const auto & group_info = pair.second;
+
+    if (group_info.accumulated_scores.empty()) {
+      continue;
+    }
+
+    auto best_element = std::max_element(
+      group_info.accumulated_scores.begin(), group_info.accumulated_scores.end(),
+      [](const auto & a, const auto & b) { return a.second < b.second; }
+    );
+
+    const uint8_t best_color = best_element->first;
+    grouped_record_map[reg_ele_id] = group_info.best_record_for_color.at(best_color);
   }
 }
 
