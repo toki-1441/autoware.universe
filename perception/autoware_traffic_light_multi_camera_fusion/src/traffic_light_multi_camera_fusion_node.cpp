@@ -317,12 +317,10 @@ void MultiCameraFusion::groupFusion(
       traffic_light_id_to_regulatory_ele_id_[p.second.roi.traffic_light_id];
     for (const auto & reg_ele_id : reg_ele_id_vec) {
       group_fusion_info_map[reg_ele_id].accumulated_scores[color] += confidence;
-      auto & best_record_for_color =
-        group_fusion_info_map[reg_ele_id].best_record_for_color[color];
+      auto & best_record_for_color = group_fusion_info_map[reg_ele_id].best_record_for_color[color];
       if (
         best_record_for_color.signal.elements.empty() ||
-        confidence > best_record_for_color.signal.elements[0].confidence  
-      ) {
+        confidence > best_record_for_color.signal.elements[0].confidence) {
         best_record_for_color = record;
       }
     }
@@ -338,8 +336,7 @@ void MultiCameraFusion::groupFusion(
 
     auto best_element = std::max_element(
       group_info.accumulated_scores.begin(), group_info.accumulated_scores.end(),
-      [](const auto & a, const auto & b) { return a.second < b.second; }
-    );
+      [](const auto & a, const auto & b) { return a.second < b.second; });
 
     const uint8_t best_color = best_element->first;
     grouped_record_map[reg_ele_id] = group_info.best_record_for_color.at(best_color);
