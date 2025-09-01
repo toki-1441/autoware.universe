@@ -311,6 +311,9 @@ void MultiCameraFusion::groupFusion(
     }
 
     const auto & record = p.second;
+    if (record.signal.elements.empty()) {
+      continue;
+    }
     const uint8_t color = record.signal.elements[0].color;
     const double confidence = record.signal.elements[0].confidence;
     const auto reg_ele_id_vec =
@@ -319,7 +322,7 @@ void MultiCameraFusion::groupFusion(
       group_fusion_info_map[reg_ele_id].accumulated_scores[color] += confidence;
       auto & best_record_for_color = group_fusion_info_map[reg_ele_id].best_record_for_color[color];
       if (
-        best_record_for_color.signal.elements.empty() ||
+        best_record_for_color.signal.elements.empty() &&
         confidence > best_record_for_color.signal.elements[0].confidence) {
         best_record_for_color = record;
       }
