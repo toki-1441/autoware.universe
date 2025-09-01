@@ -322,7 +322,7 @@ void MultiCameraFusion::groupFusion(
       group_fusion_info_map[reg_ele_id].accumulated_scores[color] += confidence;
       auto & best_record_for_color = group_fusion_info_map[reg_ele_id].best_record_for_color[color];
       if (
-        best_record_for_color.signal.elements.empty() &&
+        !best_record_for_color.signal.elements.empty() &&
         confidence > best_record_for_color.signal.elements[0].confidence) {
         best_record_for_color = record;
       }
