@@ -64,7 +64,7 @@ bool operator<(const FusionRecordArr & r1, const FusionRecordArr & r2)
 
 struct GroupFusionInfo
 {
-  std::map<uint8_t, double> accumulated_scores;
+  std::map<uint8_t, double> accumulated_log_odds;
   std::map<uint8_t, FusionRecord> best_record_for_color;
 };
 
