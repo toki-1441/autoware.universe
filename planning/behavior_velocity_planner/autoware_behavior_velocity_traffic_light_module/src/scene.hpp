@@ -65,6 +65,7 @@ public:
     double yellow_light_stop_velocity;
     double stop_time_hysteresis;
     bool enable_pass_judge;
+    bool enable_arrow_aware_passing;  // Add parameter
     // Restart Suppression Parameter
     double max_behind_dist_to_stop_for_restart_suppression;
     double min_behind_dist_to_stop_for_restart_suppression;
@@ -78,7 +79,10 @@ public:
 public:
   TrafficLightModule(
     const int64_t lane_id, const lanelet::TrafficLight & traffic_light_reg_elem,
-    lanelet::ConstLanelet lane, const PlannerParam & planner_param, const rclcpp::Logger logger,
+    lanelet::ConstLanelet lane, const lanelet::ConstLineString3d & initial_stop_line,
+    const bool is_turn_lane,
+    const bool has_static_arrow,
+    const PlannerParam & planner_param, const rclcpp::Logger logger,
     const rclcpp::Clock::SharedPtr clock,
     const std::shared_ptr<autoware_utils::TimeKeeper> time_keeper,
     const std::shared_ptr<planning_factor_interface::PlanningFactorInterface>
@@ -97,6 +101,8 @@ public:
   {
     return first_ref_stop_path_point_index_;
   }
+
+  void updateStopLine(const lanelet::ConstLineString3d & stop_line);
 
 private:
   bool isStopSignal();
@@ -121,6 +127,13 @@ private:
   // Key Feature
   const lanelet::TrafficLight & traffic_light_reg_elem_;
   lanelet::ConstLanelet lane_;
+  lanelet::ConstLineString3d
+    stop_line_;  // Note: this stop_line_ may not be the one bound to the traffic light regulatory
+                 // element. this is the one bound to the traffic light (line string)
+
+  // Map based information
+  const bool is_turn_lane_;
+  const bool has_static_arrow_;
 
   // State
   State state_;
@@ -143,6 +156,11 @@ private:
 
   // Traffic Light State
   TrafficSignal looking_tl_state_;
+  TrafficSignal prev_looking_tl_state_;  // Store previous state
+
+  // Store how the current yellow sequence started
+  enum class YellowState { kNotYellow, kFromGreen, kFromRedArrow };
+  YellowState yellow_transition_state_;
 };
 }  // namespace autoware::behavior_velocity_planner
 

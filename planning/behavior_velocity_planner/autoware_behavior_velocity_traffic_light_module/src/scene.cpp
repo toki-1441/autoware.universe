@@ -42,8 +42,13 @@
 namespace autoware::behavior_velocity_planner
 {
 TrafficLightModule::TrafficLightModule(
-  const int64_t lane_id, const lanelet::TrafficLight & traffic_light_reg_elem,
-  lanelet::ConstLanelet lane, const PlannerParam & planner_param, const rclcpp::Logger logger,
+  const int64_t lane_id,
+  const lanelet::TrafficLight & traffic_light_reg_elem,
+  lanelet::ConstLanelet lane,
+  const lanelet::ConstLineString3d & initial_stop_line,
+  const bool is_turn_lane,
+  const bool has_static_arrow,
+  const PlannerParam & planner_param, const rclcpp::Logger logger,
   const rclcpp::Clock::SharedPtr clock,
   const std::shared_ptr<autoware_utils::TimeKeeper> time_keeper,
   const std::shared_ptr<planning_factor_interface::PlanningFactorInterface>
@@ -52,11 +57,16 @@ TrafficLightModule::TrafficLightModule(
   lane_id_(lane_id),
   traffic_light_reg_elem_(traffic_light_reg_elem),
   lane_(lane),
+  stop_line_(initial_stop_line),
+  is_turn_lane_(is_turn_lane),
+  has_static_arrow_(has_static_arrow),
   state_(State::APPROACH),
   debug_data_(),
   is_prev_state_stop_(false)
 {
   planner_param_ = planner_param;
+  prev_looking_tl_state_.traffic_light_group_id = 0;
+  yellow_transition_state_ = YellowState::kNotYellow;
 }
 
 bool TrafficLightModule::modifyPathVelocity(PathWithLaneId * path)
@@ -69,12 +79,9 @@ bool TrafficLightModule::modifyPathVelocity(PathWithLaneId * path)
 
   const auto & self_pose = planner_data_->current_odometry;
 
-  // Get lanelet2 stop lines.
-  lanelet::ConstLineString3d lanelet_stop_lines = *(traffic_light_reg_elem_.stopLine());
-
   // Calculate stop pose and insert index
   const auto stop_line = calcStopPointAndInsertIndex(
-    input_path, lanelet_stop_lines,
+    input_path, stop_line_,
     planner_param_.stop_margin + planner_data_->vehicle_info_.max_longitudinal_offset_m);
 
   if (!stop_line.has_value()) {
@@ -149,7 +156,7 @@ bool TrafficLightModule::modifyPathVelocity(PathWithLaneId * path)
         RCLCPP_DEBUG(logger_, "Suppressing restart due to proximity to stop line.");
         const auto & ego_pos = planner_data_->current_odometry->pose.position;
         const double dist =
-          autoware::motion_utils::calcSignedArcLength(input_path.points, ego_pos, 0L);
+          autoware::motion_utils::calcSignedArcLength(input_path.points, 0L, ego_pos);
         const auto pose_opt =
           autoware::motion_utils::calcLongitudinalOffsetPose(input_path.points, 0L, dist);
         if (pose_opt.has_value()) {
@@ -193,6 +200,8 @@ bool TrafficLightModule::modifyPathVelocity(PathWithLaneId * path)
 
 bool TrafficLightModule::isStopSignal()
 {
+  // Store previous state before updating
+  prev_looking_tl_state_ = looking_tl_state_;
   updateTrafficSignal();
 
   // If there is no upcoming traffic signal information,
@@ -207,6 +216,84 @@ bool TrafficLightModule::isStopSignal()
   // Stop if the traffic signal information has timed out
   if (isTrafficSignalTimedOut()) {
     return true;
+  }
+
+  // Check if current state is yellow
+  bool is_yellow_now = false;
+  for (const auto & element : looking_tl_state_.elements) {
+    if (
+      element.color == TrafficSignalElement::AMBER &&
+      (element.status == TrafficSignalElement::SOLID_ON ||
+       element.status == TrafficSignalElement::UNKNOWN))  // Status 0 (UNKNOWN) も許容
+    {
+      is_yellow_now = true;
+      break;
+    }
+  }
+
+  // Override for yellow light on turn lanes with static arrows
+  if (planner_param_.enable_arrow_aware_passing) {
+    if (is_yellow_now) {
+      // This is a yellow light. Check if this is the *start* of the yellow sequence.
+      if (yellow_transition_state_ == YellowState::kNotYellow) {
+        // This is the first frame of yellow. Determine how it started.
+        bool prev_had_green_circle = false;
+
+        // --- Debug: Log previous state ---
+        RCLCPP_INFO_THROTTLE(
+          logger_, *clock_, 1000,
+          "[TrafficLight Debug] Lane %ld: Yellow started. Checking PREVIOUS state...", lane_id_);
+        if (prev_looking_tl_state_.elements.empty()) {
+          RCLCPP_INFO_THROTTLE(
+            logger_, *clock_, 1000, "[TrafficLight Debug]   Prev state was EMPTY.");
+        }
+        for (size_t i = 0; i < prev_looking_tl_state_.elements.size(); ++i) {
+          RCLCPP_INFO_THROTTLE(
+            logger_, *clock_, 1000, "[TrafficLight Debug]   Prev Element %zu: Shape=%d, Color=%d",
+            i, prev_looking_tl_state_.elements[i].shape, prev_looking_tl_state_.elements[i].color);
+        }
+        // ---------------------------------
+
+        for (const auto & element : prev_looking_tl_state_.elements) {
+          // Check for Green Circle
+          if (
+            element.shape == TrafficSignalElement::CIRCLE &&
+            element.color == TrafficSignalElement::GREEN) {
+            prev_had_green_circle = true;
+            break;
+          }
+        }
+
+        if (prev_had_green_circle) {
+          RCLCPP_INFO_THROTTLE(
+            logger_, *clock_, 1000, "[TrafficLight Debug]   -> Detected Green->Yellow transition.");
+          yellow_transition_state_ = YellowState::kFromGreen;
+        } else {
+          RCLCPP_INFO_THROTTLE(
+            logger_, *clock_, 1000, "[TrafficLight Debug]   -> NO Green Circle found in prev state.");
+          yellow_transition_state_ = YellowState::kFromRedArrow;
+        }
+      }
+
+      // Check if conditions are met (Green->Yellow, turn lane, static arrow)
+      if (
+        is_turn_lane_ && has_static_arrow_ &&
+        yellow_transition_state_ == YellowState::kFromGreen) {
+        // This is a "Green -> Yellow" sequence. This is the state we *do* want to override (pass).
+        return false;  // Override (Pass)
+      } else {
+        // This is a "Red+Arrow -> Yellow" sequence (or param/map mismatch).
+        // Do not return false. Fall through to normal stop logic.
+      }
+    } else {
+      // Not yellow. Reset the state.
+      if (yellow_transition_state_ != YellowState::kNotYellow) {
+        RCLCPP_INFO_THROTTLE(
+          logger_, *clock_, 1000, "[TrafficLight Debug] Lane %ld: Yellow ended. Resetting state.",
+          lane_id_);
+      }
+      yellow_transition_state_ = YellowState::kNotYellow;
+    }
   }
 
   // Check if the current traffic signal state requires stopping
@@ -360,6 +447,11 @@ autoware_internal_planning_msgs::msg::PathWithLaneId TrafficLightModule::insertS
     0.0 /*shift distance*/, "traffic_light");
 
   return modified_path;
+}
+
+void TrafficLightModule::updateStopLine(const lanelet::ConstLineString3d & stop_line)
+{
+  stop_line_ = stop_line;
 }
 
 }  // namespace autoware::behavior_velocity_planner
