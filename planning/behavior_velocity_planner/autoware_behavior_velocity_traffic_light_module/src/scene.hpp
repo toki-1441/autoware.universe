@@ -80,6 +80,7 @@ public:
   TrafficLightModule(
     const int64_t lane_id, const lanelet::TrafficLight & traffic_light_reg_elem,
     lanelet::ConstLanelet lane, const lanelet::ConstLineString3d & initial_stop_line,
+    // Map based information
     const bool is_turn_lane,
     const bool has_static_arrow,
     const PlannerParam & planner_param, const rclcpp::Logger logger,
@@ -130,11 +131,6 @@ private:
   lanelet::ConstLineString3d
     stop_line_;  // Note: this stop_line_ may not be the one bound to the traffic light regulatory
                  // element. this is the one bound to the traffic light (line string)
-
-  // Map based information
-  const bool is_turn_lane_;
-  const bool has_static_arrow_;
-
   // State
   State state_;
 
